@@ -1,6 +1,7 @@
 import io
 import os
 import uuid
+import zipfile
 import pandas as pd
 import pdfplumber
 import requests
@@ -27,7 +28,7 @@ class PDFExtractor(Extractor):
             return None  # Skip malformed tables
         return table
 
-    def fetch_and_extract(self, url, output_dir):
+    def fetch_and_extract(self, url, output_dir, single_file):
         """Download and extract tables from a single PDF file and save as a single CSV."""
         try:
             print(f"Processing: {url}")
@@ -41,6 +42,8 @@ class PDFExtractor(Extractor):
 
             extracted_tables = []
             pdf_headers = None
+            pdf_filename = os.path.basename(url).replace('.pdf', '.csv')
+            pdf_filepath = os.path.join(output_dir, pdf_filename)
             
             with pdfplumber.open(pdf_file) as pdf:
                 for page_num, page in enumerate(pdf.pages):
@@ -75,9 +78,9 @@ class PDFExtractor(Extractor):
                         extracted_tables.append(df)
 
             if extracted_tables:
-                pdf_filename = os.path.join(output_dir, f"pdf_{uuid.uuid4().hex}.csv")
                 final_pdf_df = pd.concat(extracted_tables, ignore_index=True)
-                final_pdf_df.to_csv(pdf_filename, index=False)
+                if not single_file:
+                    final_pdf_df.to_csv(pdf_filepath, index=False)
 
             print(f"Completed processing: {url}")
             return extracted_tables if extracted_tables else None
@@ -87,42 +90,60 @@ class PDFExtractor(Extractor):
             print(f"Unexpected error processing {url}: {e} (File: {url})")
         return None
 
-    def extract(self, urls: list):
-        """Extract tables from multiple PDF files in parallel and write one CSV per PDF before merging."""
+    def extract(self, urls: list, single_file=True):
+        """Extract tables from multiple PDF files in parallel. If single_file=True, process in memory; otherwise, store and zip CSVs."""
         execution_id = uuid.uuid4().hex
         output_dir = f"extraction_{execution_id}"
         os.makedirs(output_dir, exist_ok=True)
 
+        all_dfs = []
+
         # Use ThreadPoolExecutor for efficient I/O-bound parallelism
         with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as executor:
-            future_to_url = {executor.submit(self.fetch_and_extract, url, output_dir): url for url in urls}
+            future_to_url = {executor.submit(self.fetch_and_extract, url, output_dir, single_file): url for url in urls}
             for future in as_completed(future_to_url):
                 try:
-                    future.result()
+                    result = future.result()
+                    if result and single_file:
+                        all_dfs.extend(result)  # Keep all extracted data in memory
                 except Exception as e:
                     print(f"Error processing PDF: {future_to_url[future]}, Error: {e} (File: {future_to_url[future]})")
 
-        # Merge all PDF CSVs into a single file
-        unique_filename = f"{output_dir}/final_extracted_data.csv"
-        all_dfs = []
-        for csv_file in os.listdir(output_dir):
-            if csv_file.endswith(".csv") and csv_file != "final_extracted_data.csv":
-                df = pd.read_csv(os.path.join(output_dir, csv_file))
-                all_dfs.append(df)
-        
-        if all_dfs:
-            final_df = pd.concat(all_dfs, ignore_index=True)
-            final_df.to_csv(unique_filename, index=False)
-        
-            buffer = io.StringIO()
-            with open(unique_filename, "r", encoding="utf-8") as f:
+        if single_file:
+            if all_dfs:
+                final_df = pd.concat(all_dfs, ignore_index=True)
+                buffer = io.StringIO()
+                final_df.to_csv(buffer, index=False)
+                buffer.seek(0)
+
+                headers = {
+                    'Content-Disposition': 'attachment; filename="final_extracted_data.csv"'
+                }
+                return buffer, 'text/csv', headers
+            else:
+                print("No valid tables were extracted.")
+                return None
+        else:
+            # Zip all extracted CSVs and return
+            zip_filename = f"{output_dir}.zip"
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for csv_file in os.listdir(output_dir):
+                    csv_path = os.path.join(output_dir, csv_file)
+                    if csv_file.endswith(".csv"):
+                        zipf.write(csv_path, os.path.basename(csv_path))
+            
+            buffer = io.BytesIO()
+            with open(zip_filename, "rb") as f:
                 buffer.write(f.read())
             buffer.seek(0)
 
+            # Cleanup temporary folder
+            for file in os.listdir(output_dir):
+                os.remove(os.path.join(output_dir, file))
+            os.rmdir(output_dir)
+            os.remove(zip_filename)
+            
             headers = {
-                'Content-Disposition': f'attachment; filename="final_extracted_data.csv"'
+                'Content-Disposition': f'attachment; filename="extracted_pdfs.zip"'
             }
-            return buffer, 'text/csv', headers
-        else:
-            print("No valid tables were extracted.")
-            return None
+            return buffer, 'application/zip', headers

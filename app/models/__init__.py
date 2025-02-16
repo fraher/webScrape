@@ -1,4 +1,4 @@
 # app/models/__init__.py
-from .filetype import FileType
+from .datatypes import FileType, DataType, OutputFormat
 
-__all__ = ['FileType']
+__all__ = ['FileType', 'DataType', 'OutputFormat']

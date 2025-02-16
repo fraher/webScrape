@@ -1,0 +1,8 @@
+POST http://127.0.0.1:8000/files/extract HTTP/1.1
+Content-Type: application/json
+
+{
+  "document_urls": ["https://www.pa.gov/content/dam/copapwp-pagov/en/dli/documents/businesses/compensation/wc/hcsr/medfeereview/fee-schedule/documents/part-b/31636-33211.pdf"],
+  "data_type": "tables",  
+  "output_format": "csv"
+}
