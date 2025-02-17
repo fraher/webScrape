@@ -8,6 +8,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 from .extractor import Extractor
+import shutil
 
 class PDFExtractor(Extractor):
     def clean_header(self, header):
@@ -90,60 +91,60 @@ class PDFExtractor(Extractor):
             print(f"Unexpected error processing {url}: {e} (File: {url})")
         return None
 
+
     def extract(self, urls: list, single_file=True):
         """Extract tables from multiple PDF files in parallel. If single_file=True, process in memory; otherwise, store and zip CSVs."""
         execution_id = uuid.uuid4().hex
-        output_dir = f"extraction_{execution_id}"
+        output_dir = f"extract_{execution_id}"
         os.makedirs(output_dir, exist_ok=True)
 
         all_dfs = []
 
-        # Use ThreadPoolExecutor for efficient I/O-bound parallelism
-        with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as executor:
-            future_to_url = {executor.submit(self.fetch_and_extract, url, output_dir, single_file): url for url in urls}
-            for future in as_completed(future_to_url):
-                try:
-                    result = future.result()
-                    if result and single_file:
-                        all_dfs.extend(result)  # Keep all extracted data in memory
-                except Exception as e:
-                    print(f"Error processing PDF: {future_to_url[future]}, Error: {e} (File: {future_to_url[future]})")
+        try:
+            # Use ThreadPoolExecutor for efficient I/O-bound parallelism
+            with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as executor:
+                future_to_url = {executor.submit(self.fetch_and_extract, url, output_dir, single_file): url for url in urls}
+                for future in as_completed(future_to_url):
+                    try:
+                        result = future.result()
+                        if result and single_file:
+                            all_dfs.extend(result)  # Keep all extracted data in memory
+                    except Exception as e:
+                        print(f"Error processing PDF: {future_to_url[future]}, Error: {e} (File: {future_to_url[future]})")
 
-        if single_file:
-            if all_dfs:
-                final_df = pd.concat(all_dfs, ignore_index=True)
-                buffer = io.StringIO()
-                final_df.to_csv(buffer, index=False)
+            if single_file:
+                if all_dfs:
+                    final_df = pd.concat(all_dfs, ignore_index=True)
+                    buffer = io.StringIO()
+                    final_df.to_csv(buffer, index=False)
+                    buffer.seek(0)
+
+                    headers = {
+                        'Content-Disposition': 'attachment; filename="final_extracted_data.csv"'
+                    }
+                    return buffer, 'text/csv', headers
+                else:
+                    print("No valid tables were extracted.")
+                    return None
+            else:
+                # Zip all extracted CSVs and return
+                zip_filename = f"{output_dir}.zip"
+                with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for csv_file in os.listdir(output_dir):
+                        csv_path = os.path.join(output_dir, csv_file)
+                        if csv_file.endswith(".csv"):
+                            zipf.write(csv_path, os.path.basename(csv_path))
+
+                buffer = io.BytesIO()
+                with open(zip_filename, "rb") as f:
+                    buffer.write(f.read())
                 buffer.seek(0)
 
                 headers = {
-                    'Content-Disposition': 'attachment; filename="final_extracted_data.csv"'
+                    'Content-Disposition': f'attachment; filename="extracted_pdfs.zip"'
                 }
-                return buffer, 'text/csv', headers
-            else:
-                print("No valid tables were extracted.")
-                return None
-        else:
-            # Zip all extracted CSVs and return
-            zip_filename = f"{output_dir}.zip"
-            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for csv_file in os.listdir(output_dir):
-                    csv_path = os.path.join(output_dir, csv_file)
-                    if csv_file.endswith(".csv"):
-                        zipf.write(csv_path, os.path.basename(csv_path))
-            
-            buffer = io.BytesIO()
-            with open(zip_filename, "rb") as f:
-                buffer.write(f.read())
-            buffer.seek(0)
+                return buffer, 'application/zip', headers
+        finally:
+            # Cleanup temporary folder in all cases
+            shutil.rmtree(output_dir, ignore_errors=True)
 
-            # Cleanup temporary folder
-            for file in os.listdir(output_dir):
-                os.remove(os.path.join(output_dir, file))
-            os.rmdir(output_dir)
-            os.remove(zip_filename)
-            
-            headers = {
-                'Content-Disposition': f'attachment; filename="extracted_pdfs.zip"'
-            }
-            return buffer, 'application/zip', headers
