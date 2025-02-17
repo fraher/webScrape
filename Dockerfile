@@ -1,5 +1,5 @@
 # Start from the official Python 3.11 slim image
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # Set the working directory
 WORKDIR /app
@@ -27,8 +27,3 @@ EXPOSE 8000
 
 # Run the FastAPI server
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# Note:
-# - Replace `requirements.txt` with your dependencies file name.
-# - Ensure `pytest` is in your `requirements.txt`.
-# - Replace `main:app` with `MODULE_NAME:VARIABLE_NAME` according to your FastAPI app entry point.
