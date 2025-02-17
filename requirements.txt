@@ -12,3 +12,4 @@ uvicorn==0.34.0
 webcolors==24.11.1
 yarg==0.1.9
 beautifulsoup4==4.13.3
+pyarrow==19.0.0

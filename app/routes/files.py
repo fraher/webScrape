@@ -17,8 +17,7 @@ class DiscoverRequest(BaseModel):
 class ExtractRequest(BaseModel):
     document_urls: list[str] = None
     data_type: DataType = DataType.Tables
-    output_format: str = OutputFormat.CSV
-    single_file: bool = True
+    output_format: str = OutputFormat.CSV    
 
 class CollectRequest(BaseModel):
     discover: DiscoverRequest    
